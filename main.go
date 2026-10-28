@@ -28,10 +28,21 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer db.Close()
 	dbQueries := database.New(db)
 	if err := c.register("login", handlerLogin); err != nil {
 		log.Fatal(err)
 	}
+	if err := c.register("register", handlerRegister); err != nil {
+		log.Fatal(err)
+	}
+	if err := c.register("reset", handlerResetUsers); err != nil {
+		log.Fatal(err)
+	}
+	if err := c.register("users", handlerUsers); err != nil {
+		log.Fatal(err)
+	}
+	s.db = dbQueries
 	if len(args) < 2 {
 		fmt.Println("not enough arguments")
 		os.Exit(1)
