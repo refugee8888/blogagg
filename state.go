@@ -84,12 +84,51 @@ func handlerUsers(s *state, cmd command) error {
 		os.Exit(1)
 		return err
 	}
+
 	for _, v := range getter {
 		if s.cfg.CurrentUserName == v.Name {
 			fmt.Println("* " + v.Name + " (current)")
 		} else {
 			fmt.Println("* " + v.Name)
 		}
+	}
+
+	return nil
+}
+
+func handlerFeed(s *state, cmd command) error {
+	fmt.Println(fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml"))
+
+	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	if ok := len(cmd.Arguments) < 2; ok {
+		return fmt.Errorf("both feed name and url are required")
+	}
+	curUser, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+	if err != nil {
+		return err
+	}
+
+	newFeed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{uuid.New(), time.Now(), time.Now(), cmd.Arguments[0], cmd.Arguments[1], curUser.ID})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(newFeed.Name, newFeed.ID, newFeed.Url)
+	return nil
+}
+
+func handlerFeeds(s *state, cmd command) error {
+	getter, err := s.db.GetFeeds(context.Background())
+	if err != nil {
+		os.Exit(1)
+		return err
+	}
+
+	for _, v := range getter {
+		fmt.Println(v.Name, v.Url, v.UserName)
 	}
 
 	return nil

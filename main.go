@@ -42,6 +42,15 @@ func main() {
 	if err := c.register("users", handlerUsers); err != nil {
 		log.Fatal(err)
 	}
+	if err := c.register("agg", handlerFeed); err != nil {
+		log.Fatal(err)
+	}
+	if err := c.register("addfeed", handlerAddFeed); err != nil {
+		log.Fatal(err)
+	}
+	if err := c.register("feeds", handlerFeeds); err != nil {
+		log.Fatal(err)
+	}
 	s.db = dbQueries
 	if len(args) < 2 {
 		fmt.Println("not enough arguments")
