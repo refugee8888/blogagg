@@ -66,8 +66,7 @@ func handlerRegister(s *state, cmd command) error {
 func handlerResetUsers(s *state, cmd command) error {
 	err := s.db.ResetUsers(context.Background())
 	if err != nil {
-		os.Exit(1)
-		return err
+		return fmt.Errorf("%w", err)
 	}
 
 	if err := s.cfg.SetUser(""); err != nil {
@@ -96,24 +95,62 @@ func handlerUsers(s *state, cmd command) error {
 	return nil
 }
 
-func handlerFeed(s *state, cmd command) error {
-	fmt.Println(fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml"))
-
+func scrapeFeeds(s *state) error {
+	nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	if _, err := s.db.MarkFeedFetched(context.Background(), nextFeed.ID); err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	fetchedFeed, err := fetchFeed(context.Background(), nextFeed.Url)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	for _, v := range fetchedFeed.Channel.Item {
+		fmt.Println(v.Title)
+	}
 	return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerFeed(s *state, cmd command) error {
+	if ok := len(cmd.Arguments) == 0; ok {
+		return fmt.Errorf("time between requests is required")
+	}
+	time_between_reqs, err := time.ParseDuration(cmd.Arguments[0])
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	ticker := time.NewTicker(time_between_reqs)
+	defer ticker.Stop()
+	for ; ; <-ticker.C {
+
+		fmt.Printf("Collecting feeds every %v", time_between_reqs)
+		if err := scrapeFeeds(s); err != nil {
+			return fmt.Errorf("%w", err)
+		}
+
+	}
+}
+
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if ok := len(cmd.Arguments) < 2; ok {
 		return fmt.Errorf("both feed name and url are required")
 	}
-	curUser, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+
+	newFeed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{uuid.New(), time.Now(), time.Now(), cmd.Arguments[0], cmd.Arguments[1], user.ID})
 	if err != nil {
 		return err
 	}
 
-	newFeed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{uuid.New(), time.Now(), time.Now(), cmd.Arguments[0], cmd.Arguments[1], curUser.ID})
-	if err != nil {
-		return err
+	if _, err := s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		uuid.New(), time.Now(),
+		time.Now(),
+		user.ID,
+		newFeed.ID,
+	}); err != nil {
+		return fmt.Errorf("%w", err)
 	}
 
 	fmt.Println(newFeed.Name, newFeed.ID, newFeed.Url)
@@ -134,6 +171,62 @@ func handlerFeeds(s *state, cmd command) error {
 	return nil
 }
 
+func handlerFeedFollow(s *state, cmd command, user database.User) error {
+	if ok := len(cmd.Arguments) == 0; ok {
+		return fmt.Errorf("feed url is required")
+	}
+
+	feeds, err := s.db.GetFeeds(context.Background())
+	if err != nil {
+		os.Exit(1)
+		return err
+	}
+	var curFeed uuid.UUID
+	for _, v := range feeds {
+		if v.Url == cmd.Arguments[0] {
+			curFeed = v.ID
+		}
+	}
+	fmt.Println(user.ID, curFeed)
+	getter, err := s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		uuid.New(), time.Now(),
+		time.Now(),
+		user.ID,
+		curFeed,
+	})
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	fmt.Println(getter.FeedName, getter.UserName)
+
+	return nil
+}
+
+func handlerUserFollowing(s *state, cmd command, user database.User) error {
+	feeds, err := s.db.GetFeedFollowsForUser(context.Background(), user.Name)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	for _, v := range feeds {
+		fmt.Println(v.Follows, v.Username, v.Feedname)
+	}
+	return nil
+}
+
+func handlerFeedUnfollow(s *state, cmd command, user database.User) error {
+	if ok := len(cmd.Arguments) == 0; ok {
+		return fmt.Errorf("feed url is required")
+	}
+	err := s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{cmd.Arguments[0], user.ID})
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	} else {
+		fmt.Println("feed unfollowed")
+	}
+	return nil
+}
+
 func (c *commands) run(s *state, cmd command) error {
 	v, ok := c.NameToHandler[cmd.Name]
 	if !ok {
@@ -148,4 +241,14 @@ func (c *commands) register(name string, f func(*state, command) error) error {
 	}
 	c.NameToHandler[name] = f
 	return nil
+}
+
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+		if err != nil {
+			return err
+		}
+		return handler(s, cmd, user)
+	}
 }

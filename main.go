@@ -45,10 +45,19 @@ func main() {
 	if err := c.register("agg", handlerFeed); err != nil {
 		log.Fatal(err)
 	}
-	if err := c.register("addfeed", handlerAddFeed); err != nil {
+	if err := c.register("addfeed", middlewareLoggedIn(handlerAddFeed)); err != nil {
 		log.Fatal(err)
 	}
 	if err := c.register("feeds", handlerFeeds); err != nil {
+		log.Fatal(err)
+	}
+	if err := c.register("follow", middlewareLoggedIn(handlerFeedFollow)); err != nil {
+		log.Fatal(err)
+	}
+	if err := c.register("following", middlewareLoggedIn(handlerUserFollowing)); err != nil {
+		log.Fatal(err)
+	}
+	if err := c.register("unfollow", middlewareLoggedIn(handlerFeedUnfollow)); err != nil {
 		log.Fatal(err)
 	}
 	s.db = dbQueries
