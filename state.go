@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,20 +98,48 @@ func handlerUsers(s *state, cmd command) error {
 }
 
 func scrapeFeeds(s *state) error {
-	nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
+	ctx := context.Background()
+
+	nextFeed, err := s.db.GetNextFeedToFetch(ctx)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return fmt.Errorf("couldn't get next feed: %w", err)
 	}
-	if _, err := s.db.MarkFeedFetched(context.Background(), nextFeed.ID); err != nil {
-		return fmt.Errorf("%w", err)
+	if _, err := s.db.MarkFeedFetched(ctx, nextFeed.ID); err != nil {
+		return fmt.Errorf("couldn't mark feed %s fetched: %w", nextFeed.Name, err)
 	}
-	fetchedFeed, err := fetchFeed(context.Background(), nextFeed.Url)
+
+	fetchedFeed, err := fetchFeed(ctx, nextFeed.Url)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return fmt.Errorf("couldn't fetch feed %s: %w", nextFeed.Name, err)
 	}
-	for _, v := range fetchedFeed.Channel.Item {
-		fmt.Println(v.Title)
+
+	for _, item := range fetchedFeed.Channel.Item {
+		publishedAt, ok := parseDate(item.PubDate)
+		if !ok {
+			log.Printf("couldn't parse date %q, using now", item.PubDate)
+			publishedAt = time.Now()
+		}
+
+		_, err := s.db.CreatePost(ctx, database.CreatePostParams{
+			ID:          uuid.New(),
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+			Title:       item.Title,
+			Url:         item.Link,
+			Description: sql.NullString{String: item.Description, Valid: item.Description != ""},
+			PublishedAt: publishedAt,
+			FeedID:      uuid.NullUUID{UUID: nextFeed.ID, Valid: true},
+		})
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // already exists (ON CONFLICT DO NOTHING)
+			}
+			log.Printf("couldn't create post %q: %v", item.Link, err)
+			continue
+		}
 	}
+
+	log.Printf("feed %s collected, %d items", nextFeed.Name, len(fetchedFeed.Channel.Item))
 	return nil
 }
 
@@ -132,6 +162,34 @@ func handlerFeed(s *state, cmd command) error {
 		}
 
 	}
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := 2
+	if len(cmd.Arguments) == 1 {
+		n, err := strconv.Atoi(cmd.Arguments[0])
+		if err != nil {
+			return fmt.Errorf("invalid limit %q: %w", cmd.Arguments[0], err)
+		}
+		limit = n
+	}
+
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(limit),
+	})
+	if err != nil {
+		return fmt.Errorf("couldn't get posts for user: %w", err)
+	}
+
+	for _, p := range posts {
+		fmt.Printf("%s from %s\n", p.PublishedAt, p.FeedName)
+		fmt.Printf("--- %s ---\n", p.Title)
+		fmt.Printf("    %v\n", p.Description.String)
+		fmt.Printf("Link: %s\n", p.Url)
+		fmt.Println("=====================================")
+	}
+	return nil
 }
 
 func handlerAddFeed(s *state, cmd command, user database.User) error {
@@ -251,4 +309,14 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 		}
 		return handler(s, cmd, user)
 	}
+}
+
+func parseDate(s string) (time.Time, bool) {
+	layouts := []string{time.RFC1123Z, time.RFC1123, time.RFC3339, "2006-01-02"}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }

@@ -60,6 +60,9 @@ func main() {
 	if err := c.register("unfollow", middlewareLoggedIn(handlerFeedUnfollow)); err != nil {
 		log.Fatal(err)
 	}
+	if err := c.register("browse", middlewareLoggedIn(handlerBrowse)); err != nil {
+		log.Fatal(err)
+	}
 	s.db = dbQueries
 	if len(args) < 2 {
 		fmt.Println("not enough arguments")
